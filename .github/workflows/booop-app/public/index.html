@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Booop</title>
+    <link rel="manifest" href="/manifest.json">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom Tailwind colors */
+        .bg-maroon-dark { background-color: #800020; }
+        .bg-maroon-medium { background-color: #A00028; }
+        .bg-maroon-light { background-color: #C00030; }
+        .bg-maroon-very-light { background-color: #D9B3B3; } /* For incomplete squares */
+        .text-maroon-dark { color: #800020; }
+        .text-maroon-lightest { color: #FFDADA; } /* For active menu text */
+
+        /* Custom class for explicit 2px grid gap */
+        .custom-grid-gap {
+          gap: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- Load React and ReactDOM from CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Load Babel for JSX transformation in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Your React App Code - now embedded directly -->
+    <script type="text/babel">
+        // Main App component
+        const App = () => {
+          // State for managing tasks
+          const [tasks, setTasks] = React.useState([]);
+          // State for the new task input field
+          const [newTaskName, setNewTaskName] = React.useState('');
+          // State for controlling the side menu visibility
+          const [isMenuOpen, setIsMenuOpen] = React.useState(false);
+          // State for controlling the current view ('home' or 'stats')
+          const [currentView, setCurrentView] = React.useState('home');
+          // State to track which task's monthly stats are expanded
+          const [expandedTaskStats, setExpandedTaskStats] = React.useState({});
+          // State for notification permission (still exists but button is removed)
+          const [notificationPermission, setNotificationPermission] = React.useState('default');
+
+          // Ref for the new task input field to allow focus
+          const newTaskInputRef = React.useRef(null);
+
+          // Effect to load tasks from local storage on initial render
+          React.useEffect(() => {
+            const storedTasks = localStorage.getItem('booopTasks');
+            if (storedTasks) {
+              setTasks(JSON.parse(storedTasks));
+            }
+
+            // Register Service Worker and request notification permission
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.register('/sw.js') // sw.js is now in public/
+                .then(registration => {
+                  console.log('Service Worker registered with scope:', registration.scope);
+                })
+                .catch(error => {
+                  console.log('Service Worker registration failed:', error);
+                });
+            }
+
+            // Notification permission request is still here in case you want to re-add a notification feature later
+            if ('Notification' in window) {
+              Notification.requestPermission().then(permission => {
+                setNotificationPermission(permission);
+              });
+            }
+          }, []);
+
+          // Effect to save tasks to local storage whenever the tasks state changes
+          React.useEffect(() => {
+            localStorage.setItem('booopTasks', JSON.stringify(tasks));
+          }, [tasks]);
+
+          // Function to get today's date in Walpole-MM-DD format
+          const getTodayDate = () => {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = String(today.getMonth() + 1).padStart(2, '0'); // Months are 0-indexed
+            const day = String(today.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+          };
+
+          // Function to handle adding a new task
+          const handleAddTask = () => {
+            if (newTaskName.trim() !== '') {
+              const newTaskId = Date.now().toString(); // Simple unique ID based on timestamp
+              const newTask = {
+                id: newTaskId,
+                name: newTaskName.trim(),
+                completed: {}, // Stores completion status for each day
+                comments: {},  // Stores comments for each day
+                createdAt: new Date().toISOString(), // Store creation timestamp for sorting
+              };
+              setTasks([...tasks, newTask]);
+              setNewTaskName(''); // Clear input
+              newTaskInputRef.current.focus(); // Keep focus on input
+            }
+          };
+
+          // Function to handle key press (Enter) in the new task input
+          const handleKeyPress = (e) => {
+            if (e.key === 'Enter') {
+              handleAddTask();
+            }
+          };
+
+          // Function to toggle task completion for the current day
+          const handleToggleTaskCompletion = (taskId) => {
+            const todayDate = getTodayDate();
+            setTasks(tasks.map(task =>
+              task.id === taskId
+                ? {
+                    ...task,
+                    completed: {
+                      ...task.completed,
+                      [todayDate]: !task.completed[todayDate], // Toggle completion status
+                    },
+                  }
+                : task
+            ));
+          };
+
+          // Function to update a comment for a task on a specific date
+          const handleUpdateComment = (taskId, date, comment) => {
+            setTasks(tasks.map(task =>
+              task.id === taskId
+                ? {
+                    ...task,
+                    comments: {
+                      ...task.comments,
+                      [date]: comment,
+                    },
+                  }
+                : task
+            ));
+          };
+
+          // Function to delete a task
+          const handleDeleteTask = (taskId) => {
+            // Using a custom confirmation box instead of window.confirm()
+            const confirmBox = document.createElement('div');
+            confirmBox.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+            confirmBox.innerHTML = `
+              <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm text-center">
+                <p class="text-lg mb-4">Are you sure you want to delete this task?</p>
+                <div class="flex justify-center space-x-4">
+                  <button id="cancelDelete" class="bg-gray-300 text-gray-800 px-4 py-2 rounded hover:bg-gray-400">Cancel</button>
+                  <button id="confirmDelete" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">Delete</button>
+                </div>
+              </div>
+            `;
+            document.body.appendChild(confirmBox);
+
+            document.getElementById('confirmDelete').onclick = () => {
+              setTasks(tasks.filter(task => task.id !== taskId));
+              confirmBox.remove();
+            };
+            document.getElementById('cancelDelete').onclick = () => {
+              confirmBox.remove();
+            };
+          };
+
+
+          // Function to send a notification (kept for reference, button removed from UI)
+          const sendNotification = (taskName) => {
+            if (notificationPermission === 'granted') {
+              new Notification('Booop Reminder!', {
+                body: `Don't forget to ${taskName} today!`,
+                icon: 'https://placehold.co/192x192/000000/FFFFFF?text=B', // Placeholder icon
+              });
+            } else if (notificationPermission === 'default') {
+              Notification.requestPermission().then(permission => {
+                setNotificationPermission(permission);
+                if (permission === 'granted') {
+                  new Notification('Booop Reminder!', {
+                    body: `Don't forget to ${taskName} today!`,
+                    icon: 'https://placehold.co/192x192/000000/FFFFFF?text=B', // Placeholder icon
+                  });
+                }
+              });
+            } else {
+              const message = 'Notification permission denied. Please enable notifications for Booop in your browser settings.';
+              const alertBox = document.createElement('div');
+              alertBox.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+              alertBox.innerHTML = `
+                <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm text-center">
+                  <p class="text-lg mb-4">${message}</p>
+                  <button class="bg-maroon-dark text-white px-4 py-2 rounded hover:bg-maroon-medium" onclick="this.parentNode.parentNode.remove()">OK</button>
+                </div>
+              `;
+              document.body.appendChild(alertBox);
+            }
+          };
+
+          // Function to toggle the side menu visibility
+          const toggleMenu = () => {
+            setIsMenuOpen(!isMenuOpen);
+          };
+
+          // Function to change the current view and close the menu
+          const changeView = (view) => {
+            setCurrentView(view);
+            setIsMenuOpen(false);
+          };
+
+          // Function to get days in a specific month of a year
+          const getDaysInMonth = (year, monthIndex) => {
+            const days = [];
+            let date = new Date(year, monthIndex, 1);
+            while (date.getMonth() === monthIndex) {
+              days.push(new Date(date));
+              date.setDate(date.getDate() + 1);
+            }
+            return days;
+          };
+
+          // Function to toggle expansion of monthly stats for a task
+          const toggleTaskStatsExpansion = (taskId) => {
+            setExpandedTaskStats(prev => ({
+              ...prev,
+              [taskId]: !prev[taskId],
+            }));
+          };
+
+          // Function to reorder tasks (move up/down)
+          const moveTask = (taskId, direction) => {
+            setTasks(prevTasks => {
+              const newTasks = [...prevTasks];
+              const todayDate = getTodayDate();
+
+              // Separate tasks into incomplete and completed for today
+              const incompleteTasks = newTasks.filter(task => !task.completed[todayDate]);
+              const completedTodayTasks = newTasks.filter(task => !!task.completed[todayDate]);
+
+              let targetArray = null;
+              let taskIndexInTarget = -1;
+              let taskToMove = null;
+
+              // Determine which array the task belongs to and find its index
+              taskToMove = incompleteTasks.find(task => task.id === taskId);
+              if (taskToMove) {
+                targetArray = incompleteTasks;
+                taskIndexInTarget = incompleteTasks.findIndex(task => task.id === taskId);
+              } else {
+                taskToMove = completedTodayTasks.find(task => task.id === taskId);
+                if (taskToMove) {
+                  targetArray = completedTodayTasks;
+                  taskIndexInTarget = completedTodayTasks.findIndex(task => task.id === taskId);
+                }
+              }
+
+              if (!targetArray || taskIndexInTarget === -1) return prevTasks; // Task not found
+
+              // Perform the move within the target array
+              const [removedTask] = targetArray.splice(taskIndexInTarget, 1);
+
+              if (direction === 'up' && taskIndexInTarget > 0) {
+                targetArray.splice(taskIndexInTarget - 1, 0, removedTask);
+              } else if (direction === 'down' && taskIndexInTarget < targetArray.length) {
+                targetArray.splice(taskIndexInTarget + 1, 0, removedTask);
+              } else {
+                // If move is not possible (e.g., trying to move up at index 0), put it back
+                targetArray.splice(taskIndexInTarget, 0, removedTask);
+              }
+
+              // Reconstruct the tasks array, maintaining the completed-at-bottom rule
+              // The order within incompleteTasks and completedTodayTasks is now the manually adjusted order
+              return [...incompleteTasks, ...completedTodayTasks];
+            });
+          };
+
+
+          // Render the Home view
+          const renderHomeView = () => {
+            const todayDate = getTodayDate();
+
+            // Separate tasks into incomplete and completed for today
+            // The order of tasks in the 'tasks' state is the source of truth for manual reordering
+            const incompleteTasks = tasks.filter(task => !task.completed[todayDate]);
+            const completedTodayTasks = tasks.filter(task => !!task.completed[todayDate]);
+
+            // Concatenate them for display, ensuring completed tasks are at the bottom
+            const displayedTasks = [...incompleteTasks, ...completedTodayTasks];
+
+            return (
+              <div className="p-4">
+                <h2 className="text-2xl font-bold mb-4 text-center">Your Tasks</h2>
+                <div className="mb-4 flex items-center">
+                  <input
+                    ref={newTaskInputRef}
+                    type="text"
+                    className="flex-grow p-2 border border-gray-300 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-maroon-dark"
+                    placeholder="Add a new task/goal..."
+                    value={newTaskName}
+                    onChange={(e) => setNewTaskName(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                  />
+                  <button
+                    onClick={handleAddTask}
+                    className="bg-maroon-dark text-white p-2 rounded-r-lg hover:bg-maroon-medium transition duration-200"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                  </button>
+                </div>
+
+                <ul className="space-y-3">
+                  {displayedTasks.length === 0 ? (
+                    <p className="text-center text-gray-500">No tasks added yet. Start by adding one!</p>
+                  ) : (
+                    displayedTasks.map(task => (
+                      <li
+                        key={task.id}
+                        className={`bg-white p-4 rounded-lg shadow-md flex flex-col ${
+                          !!task.completed[todayDate] ? 'opacity-60 grayscale' : ''
+                        }`}
+                      >
+                        <div className="flex items-center mb-2">
+                          <input
+                            type="checkbox"
+                            className="form-checkbox h-5 w-5 text-maroon-dark rounded mr-3"
+                            checked={!!task.completed[todayDate]} // Check if completed today
+                            onChange={() => handleToggleTaskCompletion(task.id)}
+                          />
+                          <span className="text-lg flex-grow">{task.name}</span>
+                          {/* Removed Remind Me Button */}
+                          <button
+                            onClick={() => {
+                              // Using a custom alert-like message box for comment input
+                              const existingComment = task.comments[todayDate] || '';
+                              const commentPromptBox = document.createElement('div');
+                              commentPromptBox.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+                              commentPromptBox.innerHTML = `
+                                <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm">
+                                  <p class="text-lg mb-4">Add/Edit comment for "${task.name}" on ${todayDate}:</p>
+                                  <textarea id="commentInput" class="w-full p-2 border border-gray-300 rounded mb-4" rows="3">${existingComment}</textarea>
+                                  <div class="flex justify-end space-x-2">
+                                    <button id="cancelComment" class="bg-gray-300 text-gray-800 px-4 py-2 rounded hover:bg-gray-400">Cancel</button>
+                                    <button id="saveComment" class="bg-maroon-dark text-white px-4 py-2 rounded hover:bg-maroon-medium">Save</button>
+                                  </div>
+                                </div>
+                              `;
+                              document.body.appendChild(commentPromptBox);
+
+                              const commentInput = document.getElementById('commentInput');
+                              const saveButton = document.getElementById('saveComment');
+                              const cancelButton = document.getElementById('cancelComment');
+
+                              saveButton.onclick = () => {
+                                handleUpdateComment(task.id, todayDate, commentInput.value);
+                                commentPromptBox.remove();
+                              };
+                              cancelButton.onclick = () => {
+                                commentPromptBox.remove();
+                              };
+                            }}
+                            className="bg-maroon-light text-white px-3 py-1 rounded-full text-sm hover:bg-[#E00038] transition duration-200 mr-2"
+                          >
+                            Comment
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTask(task.id)}
+                            className="bg-red-500 text-white px-3 py-1 rounded-full text-sm hover:bg-red-600 transition duration-200"
+                          >
+                            Delete
+                          </button>
+                          <div className="flex flex-col ml-2">
+                            <button
+                              onClick={() => moveTask(task.id, 'up')}
+                              className="text-gray-500 hover:text-gray-700 p-1"
+                              title="Move Up"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                              </svg>
+                            </button>
+                            <button
+                              onClick={() => moveTask(task.id, 'down')}
+                              className="text-gray-500 hover:text-gray-700 p-1"
+                              title="Move Down"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                        {task.comments[todayDate] && (
+                          <p className="text-sm text-gray-600 italic mt-1 ml-8">
+                            Note: {task.comments[todayDate]}
+                          </p>
+                        )}
+                      </li>
+                    ))
+                  )}
+                </ul>
+              </div>
+            );
+          };
+
+          // Render the Stats view
+          const renderStatsView = () => {
+            const currentYear = new Date().getFullYear();
+            const currentMonthIndex = new Date().getMonth(); // 0-indexed
+            const daysInCurrentMonth = getDaysInMonth(currentYear, currentMonthIndex);
+            const months = Array.from({ length: 12 }, (_, i) => new Date(currentYear, i, 1).toLocaleString('default', { month: 'long' }));
+
+            return (
+              <div className="p-4">
+                <div className="flex justify-end mb-4">
+                  <button
+                    onClick={() => changeView('home')}
+                    className="bg-gray-300 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-400 transition duration-200"
+                  >
+                    Back
+                  </button>
+                </div>
+                <h2 className="text-2xl font-bold mb-2 text-center text-maroon-dark">Task Statistics</h2>
+                {tasks.length === 0 ? (
+                  <p className="text-center text-gray-500">No tasks to display statistics for. Add some tasks first!</p>
+                ) : (
+                  tasks.map(task => (
+                    <div key={task.id} className="bg-white p-4 rounded-lg shadow-md mb-6">
+                      <h3
+                        className="text-xl font-semibold mb-3 cursor-pointer hover:text-maroon-dark"
+                        onClick={() => toggleTaskStatsExpansion(task.id)}
+                      >
+                        {task.name.toUpperCase()}
+                        <span className="ml-2 text-sm text-gray-500">
+                          {expandedTaskStats[task.id] ? ' (Click to collapse monthly breakdown)' : ' (Click to expand for monthly breakdown)'}
+                        </span>
+                      </h3>
+
+                      {/* Initial view: only current month's squares */}
+                      {!expandedTaskStats[task.id] && (
+                        <>
+                          <p className="text-sm text-gray-500 mb-3">Current Month</p>
+                          <div className="grid grid-cols-7 custom-grid-gap w-max"> {/* 7 columns for days of the week, 2px gap */}
+                            {/* Fill with empty squares for days before the 1st of the current month */}
+                            {Array.from({ length: new Date(currentYear, currentMonthIndex, 1).getDay() }).map((_, i) => (
+                              <div key={`empty-${currentMonthIndex}-${i}`} className="w-4 h-4"></div>
+                            ))}
+                            {daysInCurrentMonth.map((dateObj, index) => {
+                              const dateString = dateObj.toISOString().slice(0, 10);
+                              const isCompleted = task.completed[dateString];
+                              return (
+                                <div
+                                  key={dateString}
+                                  className={`w-4 h-4 rounded-sm cursor-pointer ${
+                                    isCompleted ? 'bg-maroon-dark' : 'bg-maroon-very-light'
+                                  }`}
+                                  title={`${dateString}: ${isCompleted ? 'Completed' : 'Not Completed'}${task.comments[dateString] ? ` - ${task.comments[dateString]}` : ''}`}
+                                  onClick={() => {
+                                    const comment = task.comments[dateString] || '';
+                                    const messageBox = document.createElement('div');
+                                    messageBox.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+                                    messageBox.innerHTML = `
+                                      <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm text-center">
+                                        <p class="text-lg mb-2">Date: ${dateString}</p>
+                                        <p class="text-lg mb-2">Status: ${isCompleted ? 'Completed' : 'Not Completed'}</p>
+                                        <p class="text-md italic mb-4">Comment: ${comment || 'No comment'}</p>
+                                        <button class="bg-maroon-dark text-white px-4 py-2 rounded hover:bg-maroon-medium" onclick="this.parentNode.parentNode.remove()">OK</button>
+                                      </div>
+                                    `;
+                                    document.body.appendChild(messageBox);
+                                  }}
+                                ></div>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+
+                      {/* Monthly breakdown for all 12 months (shown when expanded) */}
+                      {expandedTaskStats[task.id] && (
+                        <div className="mt-4 border-t pt-4">
+                          <h4 className="text-lg font-medium mb-3 text-maroon-dark">Monthly Breakdown:</h4>
+                          {months.map((monthName, monthIndex) => (
+                            <div key={monthIndex} className="mb-4">
+                              <h5 className="font-semibold text-gray-700 mb-2">{monthName}</h5>
+                              <div className="grid grid-cols-7 custom-grid-gap w-max"> {/* 7 columns for days of the week, 2px gap */}
+                                {/* Fill with empty squares for days before the 1st of the month */}
+                                {Array.from({ length: new Date(currentYear, monthIndex, 1).getDay() }).map((_, i) => (
+                                  <div key={`empty-${monthIndex}-${i}`} className="w-4 h-4"></div>
+                                ))}
+                                {getDaysInMonth(currentYear, monthIndex)
+                                  .map((dateObj, dayIndex) => {
+                                    const dateString = dateObj.toISOString().slice(0, 10);
+                                    const isCompleted = task.completed[dateString];
+                                    return (
+                                      <div
+                                        key={dateString}
+                                        className={`w-4 h-4 rounded-sm cursor-pointer ${
+                                          isCompleted ? 'bg-maroon-dark' : 'bg-maroon-very-light'
+                                        }`}
+                                        title={`${dateString}: ${isCompleted ? 'Completed' : 'Not Completed'}${task.comments[dateString] ? ` - ${task.comments[dateString]}` : ''}`}
+                                        onClick={() => {
+                                          const comment = task.comments[dateString] || '';
+                                          const messageBox = document.createElement('div');
+                                          messageBox.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+                                          messageBox.innerHTML = `
+                                            <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm text-center">
+                                              <p class="text-lg mb-2">Date: ${dateString}</p>
+                                              <p class="text-lg mb-2">Status: ${isCompleted ? 'Completed' : 'Not Completed'}</p>
+                                              <p class="text-md italic mb-4">Comment: ${comment || 'No comment'}</p>
+                                              <button class="bg-maroon-dark text-white px-4 py-2 rounded hover:bg-maroon-medium" onclick="this.parentNode.parentNode.remove()">OK</button>
+                                            </div>
+                                          `;
+                                          document.body.appendChild(messageBox);
+                                        }}
+                                      ></div>
+                                    );
+                                  })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            );
+          };
+
+
+          return (
+            <div className="min-h-screen bg-gray-100 font-inter flex flex-col">
+              {/* Header */}
+              <header className="bg-maroon-dark text-white p-4 shadow-md flex items-center justify-between relative z-10">
+                <button onClick={toggleMenu} className="focus:outline-none">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                </button>
+                <h1 className="text-3xl font-extrabold tracking-wide">Booop</h1>
+                <div className="w-8"></div> {/* Spacer for alignment */}
+              </header>
+
+              {/* Side Menu */}
+              <nav
+                className={`fixed top-0 left-0 w-64 h-full bg-[#500014] text-white shadow-lg transform ${ // Darker maroon for side menu
+                  isMenuOpen ? 'translate-x-0' : '-translate-x-full'
+                } transition-transform duration-300 ease-in-out z-20`}
+              >
+                <div className="p-6 text-2xl font-bold border-b border-gray-700">Menu</div>
+                <ul className="py-4">
+                  <li>
+                    <button
+                      onClick={() => changeView('home')}
+                      className={`block w-full text-left px-6 py-3 text-lg hover:bg-gray-700 transition duration-200 ${currentView === 'home' ? 'bg-gray-700 text-maroon-lightest' : ''}`}
+                    >
+                      Home
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      onClick={() => changeView('stats')}
+                      className={`block w-full text-left px-6 py-3 text-lg hover:bg-gray-700 transition duration-200 ${currentView === 'stats' ? 'bg-gray-700 text-maroon-lightest' : ''}`}
+                    >
+                      Stats
+                    </button>
+                  </li>
+                </ul>
+              </nav>
+
+              {/* Overlay when menu is open */}
+              {isMenuOpen && (
+                <div
+                  className="fixed inset-0 bg-black opacity-50 z-10"
+                  onClick={toggleMenu}
+                ></div>
+              )}
+
+              {/* Main Content Area */}
+              <main className="flex-grow container mx-auto py-6 px-4">
+                {currentView === 'home' ? renderHomeView() : renderStatsView()}
+              </main>
+            </div>
+          );
+        };
+
+        // Mount the React App
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<React.StrictMode><App /></React.StrictMode>);
+
+        // Register the Service Worker (moved here from index.js)
+        if ('serviceWorker' in navigator) {
+          window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js') // sw.js is now in public/
+              .then(registration => {
+                console.log('Service Worker registered with scope:', registration.scope);
+              })
+              .catch(error => {
+                console.log('Service Worker registration failed:', error);
+              });
+          });
+        }
+    </script>
+</body>
+</html>
